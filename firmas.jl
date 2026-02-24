@@ -367,15 +367,26 @@ end;
 
 
 function confusionMatrix(outputs::AbstractArray{Bool,1}, targets::AbstractArray{Bool,1})
-    #
-    # Codigo a desarrollar
-    #
+    VP = sum((outputs .== true) .& (targets .== true)) # Verdaderos Positivos
+    VN = sum((outputs .== false) .& (targets .== false)) # Verdaderos Negativos
+    FP = sum((outputs .== true) .& (targets .== false)) # Falsos Positivos
+    FN = sum((outputs .== false) .& (targets .== true)) # Falsos Negativos
+
+    accuracy = (VP + VN) / (VP + VN + FP + FN)
+    error_rate = (FP + FN) / (VP + VN + FP + FN) # 1. - accuracy;?
+    sensitivity = VP == 0 && FN == 0 ? 1.0 : ( VP / (VP + FN)) # Sensibilidad si VP y FN son 0
+    specificity = VN == 0 && FP == 0 ? 1.0 : (VN / (VN + FP)) # Especificidad si VN y FP son 0
+    precision = VP == 0 && FP == 0 ? 1.0 : (VP / (VP + FP)) # Precisión si VP y FP son 0
+    NPV = VN == 0 && FN == 0 ? 1.0 : (VN / (VN + FN)) # Valor predictivo negativo si VN y FN son 0
+    f1_score = precision == 0 && sensitivity == 0 ? 0 : 2 * (precision * sensitivity) / (precision + sensitivity)
+    confusion_matrix = [VN FP; FN VP]
+
+    return accuracy, error_rate, sensitivity, specificity, precision, NPV, f1_score, confusion_matrix
 end;
 
 function confusionMatrix(outputs::AbstractArray{<:Real,1}, targets::AbstractArray{Bool,1}; threshold::Real=0.5)
-    #
-    # Codigo a desarrollar
-    #
+    outputs = outputs .>= threshold
+    confusionMatrix(outputs, targets)
 end;
 
 function confusionMatrix(outputs::AbstractArray{Bool,2}, targets::AbstractArray{Bool,2}; weighted::Bool=true)
@@ -401,6 +412,31 @@ function confusionMatrix(outputs::AbstractArray{<:Any,1}, targets::AbstractArray
     # Codigo a desarrollar
     #
 end;
+
+function printConfusionMatrix(outputs::AbstractArray{Bool,1}, targets::AbstractArray{Bool,1})
+    # Llamamos a la función que ya desarrollaste para obtener todas las métricas
+    accuracy, error_rate, sensitivity, specificity, precision_val, NPV, f1_score, conf_matrix = confusionMatrix(outputs, targets)
+    
+    # Imprimimos los resultados con un formato claro
+    println("====== MÉTRICAS DE EVALUACIÓN ======")
+    println("Precisión (Accuracy): \t\t", round(accuracy, digits=4))
+    println("Tasa de error: \t\t\t", round(error_rate, digits=4))
+    println("Sensibilidad (Recall): \t\t", round(sensitivity, digits=4))
+    println("Especificidad: \t\t\t", round(specificity, digits=4))
+    println("Valor Predictivo Positivo (VPP):\t", round(precision_val, digits=4))
+    println("Valor Predictivo Negativo (VPN):\t", round(NPV, digits=4))
+    println("F1-score: \t\t\t", round(f1_score, digits=4))
+    println("------------------------------------")
+    println("Matriz de Confusión [VN FP; FN VP]:")
+    display(conf_matrix)
+    println("====================================")
+end
+
+function printConfusionMatrix(outputs::AbstractArray{<:Real,1}, targets::AbstractArray{Bool,1}; threshold::Real=0.5)
+    # Convertimos las probabilidades a booleanos usando el umbral y llamamos a la función de impresión anterior
+    outputs_bool = outputs .>= threshold
+    printConfusionMatrix(outputs_bool, targets)
+end
 
 using SymDoME
 using GeneticProgramming
