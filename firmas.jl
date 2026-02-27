@@ -389,32 +389,72 @@ function confusionMatrix(outputs::AbstractArray{<:Real,1}, targets::AbstractArra
     confusionMatrix(outputs, targets)
 end;
 
-function confusionMatrix(outputs::AbstractArray{Bool,2}, targets::AbstractArray{Bool,2}; weighted::Bool=true)
-    #
-    # Codigo a desarrollar
-    #
+function confusionMatrix(outputs::AbstractArray{Bool, 2}, targets::AbstractArray{Bool, 2}; weighted::Bool = true)
+	@assert(size(outputs) == size(targets))
+	(numInstances, numClasses) = size(targets)
+    
+	# Nos aseguramos de que no hay dos columnas
+	@assert(numClasses != 2)
+	if (numClasses == 1)
+		return confusionMatrix(outputs[:, 1], targets[:, 1])
+	end
+
+	# Nos aseguramos de que en cada fila haya uno y solo un valor a true
+	@assert(all(sum(outputs, dims = 2) .== 1))
+    
+	# Metricas
+	resultados = confusionMatrix.(eachcol(outputs), eachcol(targets))
+	
+	recall      = getindex.(resultados, 3)
+	specificity = getindex.(resultados, 4)
+	precision   = getindex.(resultados, 5)
+	NPV         = getindex.(resultados, 6)
+	F1          = getindex.(resultados, 7)
+
+	confMatrix = targets' * outputs # 
+
+	# Aplicamos las formas de combinar las metricas macro o weighted
+	if weighted
+		# Calculamos los valores de ponderacion para hacer el promedio
+		numInstancesFromEachClass = vec(sum(targets, dims = 1))
+		@assert(numInstances == sum(numInstancesFromEachClass))
+		weights     = numInstancesFromEachClass ./ sum(numInstancesFromEachClass)
+        
+		recall      = sum(weights .* recall)
+		specificity = sum(weights .* specificity)
+		precision   = sum(weights .* precision)
+		NPV         = sum(weights .* NPV)
+		F1          = sum(weights .* F1)
+	else
+		recall      = mean(recall)
+		specificity = mean(specificity)
+		precision   = mean(precision)
+		NPV         = mean(NPV)
+		F1          = mean(F1)
+	end
+    
+	# Precision y tasa de error las calculamos con las funciones definidas previamente
+	acc = accuracy(outputs, targets) # Asumo que tienes esta función en tu entorno
+	errorRate = 1 - acc
+
+	return (acc, errorRate, recall, specificity, precision, NPV, F1, confMatrix)
+end
+confusionMatrix(outputs::AbstractArray{<:Real, 2}, targets::AbstractArray{Bool, 2}; threshold::Real = 0.5, weighted::Bool = true) = confusionMatrix(classifyOutputs(outputs; threshold = threshold), targets; weighted = weighted)
+
+function confusionMatrix(outputs::AbstractArray{<:Any, 1}, targets::AbstractArray{<:Any, 1}, classes::AbstractArray{<:Any, 1}; weighted::Bool = true)
+	# Comprobamos que todas las clases de salida esten dentro de las clases de las salidas deseadas
+	@assert(all([in(label, classes) for label in vcat(targets, outputs)]))
+	# Es importante pasar el mismo vector de clases como argumento a las 2 llamadas a oneHotEncoding para que el orden de las clases sea el mismo en ambas matrices
+	return confusionMatrix(oneHotEncoding(outputs, classes), oneHotEncoding(targets, classes); weighted = weighted)
 end;
 
-function confusionMatrix(outputs::AbstractArray{<:Real,2}, targets::AbstractArray{Bool,2}; threshold::Real=0.5, weighted::Bool=true)
-    #
-    # Codigo a desarrollar
-    #
-end;
-
-function confusionMatrix(outputs::AbstractArray{<:Any,1}, targets::AbstractArray{<:Any,1}, classes::AbstractArray{<:Any,1}; weighted::Bool=true)
-    #
-    # Codigo a desarrollar
-    #
-end;
-
-function confusionMatrix(outputs::AbstractArray{<:Any,1}, targets::AbstractArray{<:Any,1}; weighted::Bool=true)
-    #
-    # Codigo a desarrollar
-    #
+function confusionMatrix(outputs::AbstractArray{<:Any, 1}, targets::AbstractArray{<:Any, 1}; weighted::Bool = true)
+	classes = unique(vcat(targets, outputs))
+	return confusionMatrix(outputs, targets, classes; weighted = weighted)
 end;
 
 function printConfusionMatrix(outputs::AbstractArray{Bool,1}, targets::AbstractArray{Bool,1})
-    # Llamamos a la función que ya desarrollaste para obtener todas las métricas
+    # Llamamos a la funcion que ya desarrollaste para obtener todas las metricas
     accuracy, error_rate, sensitivity, specificity, precision_val, NPV, f1_score, conf_matrix = confusionMatrix(outputs, targets)
     
     # Imprimimos los resultados con un formato claro
