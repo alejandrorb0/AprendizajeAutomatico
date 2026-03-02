@@ -593,8 +593,10 @@ function crossvalidation(targets::AbstractArray{Bool,2}, k::Int64)
 end;
 
 
-crossvalidation(targets::AbstractArray{<:Any,1}, k::Int64) =
-    crossvalidation(oneHotEncoding(targets), k);
+function crossvalidation(targets::AbstractArray{<:Any,1}, k::Int64)
+    return crossvalidation(oneHotEncoding(targets), k)
+end;
+
 
 
 function ANNCrossValidation(topology::AbstractArray{<:Int,1},
