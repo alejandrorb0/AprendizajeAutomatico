@@ -483,22 +483,78 @@ using GeneticProgramming
 
 
 function trainClassDoME(trainingDataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{Bool,1}}, testInputs::AbstractArray{<:Real,2}, maximumNodes::Int)
-    #
-    # Codigo a desarrollar
-    #
+    (trainingInputs, trainingTargets) = trainingDataset
+    trainingInputs = Float64.(trainingInputs)
+    testInputs     = Float64.(testInputs)
+
+    # Entrena el modelo DoME (clasificación binaria)
+    (_, _, _, model) = dome(trainingInputs, trainingTargets; maximumNodes = maximumNodes)
+
+    # Evalúa en test
+    testOutputs = evaluateTree(model, testInputs)
+
+    # Si el modelo devuelve un escalar (todos los patrones de la misma clase), lo expandimos
+    if isa(testOutputs, Real)
+        testOutputs = repeat([testOutputs], size(testInputs, 1))
+    end
+
+    return testOutputs  # Vector Float64
 end;
 
 function trainClassDoME(trainingDataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{Bool,2}}, testInputs::AbstractArray{<:Real,2}, maximumNodes::Int)
-    #
-    # Codigo a desarrollar
-    #
+   (trainingInputs, trainingTargets) = trainingDataset
+    numClasses = size(trainingTargets, 2)
+
+    # Caso binario: una sola columna
+    if numClasses == 1
+        testOutputs = trainClassDoME((trainingInputs, vec(trainingTargets)), testInputs, maximumNodes)
+        return reshape(testOutputs, :, 1)
+    end
+
+    # Estrategia uno-contra-todos para más de 2 clases
+    @assert(numClasses != 2)
+    testOutputsMatrix = zeros(Float64, size(testInputs, 1), numClasses)
+    for numClass in 1:numClasses
+        testOutputsMatrix[:, numClass] = trainClassDoME(
+            (trainingInputs, trainingTargets[:, numClass]),
+            testInputs,
+            maximumNodes
+        )
+    end
+    return testOutputsMatrix
 end;
 
 
 function trainClassDoME(trainingDataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{<:Any,1}}, testInputs::AbstractArray{<:Real,2}, maximumNodes::Int)
-    #
-    # Codigo a desarrollar
-    #
+    (trainingInputs, trainingTargets) = trainingDataset
+    classes = unique(trainingTargets)
+
+    # Vector de salida del mismo tipo que trainingTargets
+    testOutputs = Array{eltype(trainingTargets), 1}(undef, size(testInputs, 1))
+
+    # One-hot-encoding con el vector de clases fijo
+    testOutputsDoME = trainClassDoME(
+        (trainingInputs, oneHotEncoding(trainingTargets, classes)),
+        testInputs,
+        maximumNodes
+    )
+
+    # classifyOutputs con umbral 0 (el signo indica la clase)
+    testOutputsBool = classifyOutputs(testOutputsDoME; threshold = 0)
+
+    if length(classes) <= 2
+        testOutputsBool = vec(testOutputsBool)
+        testOutputs[testOutputsBool]  .= classes[1]
+        if length(classes) == 2
+            testOutputs[.!testOutputsBool] .= classes[2]
+        end
+    else
+        for numClass in 1:length(classes)
+            testOutputs[testOutputsBool[:, numClass]] .= classes[numClass]
+        end
+    end
+
+    return testOutputs
 end;
 
 
@@ -512,39 +568,130 @@ using Random
 using Random:seed!
 
 function crossvalidation(N::Int64, k::Int64)
-    #
-    # Codigo a desarrollar
-    #
+    # 1. Vector 1:k, repetido hasta cubrir N, tomar primeros N y desordenar
+    indices = shuffle!(repeat(1:k, Int(ceil(N / k)))[1:N])
+    return indices
 end;
+
 
 function crossvalidation(targets::AbstractArray{Bool,1}, k::Int64)
-    #
-    # Codigo a desarrollar
-    #
+    indices = Array{Int64,1}(undef, length(targets))
+    # Asignación estratificada para positivos y negativos
+    indices[targets]   = crossvalidation(sum(targets), k)
+    indices[.!targets] = crossvalidation(sum(.!targets), k)
+    return indices
 end;
+
 
 function crossvalidation(targets::AbstractArray{Bool,2}, k::Int64)
-    #
-    # Codigo a desarrollar
-    #
+    indices = Array{Int64,1}(undef, size(targets, 1))
+    for numClass in 1:size(targets, 2)
+        mask = targets[:, numClass]
+        indices[mask] = crossvalidation(sum(mask), k)
+    end
+    return indices
 end;
 
-function crossvalidation(targets::AbstractArray{<:Any,1}, k::Int64)
-    #
-    # Codigo a desarrollar
-    #
-end;
+
+crossvalidation(targets::AbstractArray{<:Any,1}, k::Int64) =
+    crossvalidation(oneHotEncoding(targets), k);
+
 
 function ANNCrossValidation(topology::AbstractArray{<:Int,1},
     dataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{<:Any,1}},
     crossValidationIndices::Array{Int64,1};
     numExecutions::Int=50,
     transferFunctions::AbstractArray{<:Function,1}=fill(σ, length(topology)),
-    maxEpochs::Int=1000, minLoss::Real=0.0, learningRate::Real=0.01, validationRatio::Real=0, maxEpochsVal::Int=20)
-    #
-    # Codigo a desarrollar
-    #
+    maxEpochs::Int=1000, minLoss::Real=0.0, learningRate::Real=0.01,
+    validationRatio::Real=0, maxEpochsVal::Int=20)
+
+    (inputs, rawTargets) = dataset
+
+    # One-hot-encoding con clases fijas
+    classes = unique(rawTargets)
+    targets = oneHotEncoding(rawTargets, classes)
+    numClasses = length(classes)
+
+    k = maximum(crossValidationIndices)
+
+    # Vectores para métricas por fold
+    accValues  = Float64[]
+    errValues  = Float64[]
+    senValues  = Float64[]
+    speValues  = Float64[]
+    ppvValues  = Float64[]
+    npvValues  = Float64[]
+    f1Values   = Float64[]
+    confMatrix = zeros(Float64, numClasses, numClasses)
+
+    for fold in 1:k
+        # Máscaras de train/test
+        testMask  = crossValidationIndices .== fold
+        trainMask = .!testMask
+
+        trainInputs  = inputs[trainMask, :]
+        trainTargets = targets[trainMask, :]
+        testInputs   = inputs[testMask, :]
+        testTargets  = targets[testMask, :]
+
+        # Vectores de métricas para las numExecutions ejecuciones de este fold
+        accFold = Float64[]; errFold = Float64[]
+        senFold = Float64[]; speFold = Float64[]
+        ppvFold = Float64[]; npvFold = Float64[]
+        f1Fold  = Float64[]
+        confFold = zeros(Float64, numClasses, numClasses, numExecutions)
+
+        for exec in 1:numExecutions
+            # División opcional en entrenamiento+validación
+            if validationRatio > 0
+                # El ratio ajustado respecto al fold de entrenamiento
+                valRatioAdjusted = validationRatio * size(inputs, 1) / size(trainInputs, 1)
+                (tIdx, vIdx) = holdOut(size(trainInputs, 1), valRatioAdjusted)
+                (ann, _, _, _) = trainClassANN(topology,
+                    (trainInputs[tIdx, :], trainTargets[tIdx, :]);
+                    validationDataset = (trainInputs[vIdx, :], trainTargets[vIdx, :]),
+                    transferFunctions = transferFunctions,
+                    maxEpochs = maxEpochs, minLoss = minLoss,
+                    learningRate = learningRate, maxEpochsVal = maxEpochsVal)
+            else
+                (ann, _, _, _) = trainClassANN(topology,
+                    (trainInputs, trainTargets);
+                    transferFunctions = transferFunctions,
+                    maxEpochs = maxEpochs, minLoss = minLoss,
+                    learningRate = learningRate)
+            end
+
+            # Evaluación en test
+            testOutputs = ann(Float32.(testInputs)')'
+            (acc, err, sen, spe, ppv, npv, f1, cm) = confusionMatrix(testOutputs, testTargets)
+
+            push!(accFold, acc); push!(errFold, err)
+            push!(senFold, sen); push!(speFold, spe)
+            push!(ppvFold, ppv); push!(npvFold, npv)
+            push!(f1Fold,  f1)
+            confFold[:, :, exec] = Float64.(cm)
+        end
+
+        # Promedios del fold
+        push!(accValues, mean(accFold)); push!(errValues, mean(errFold))
+        push!(senValues, mean(senFold)); push!(speValues, mean(speFold))
+        push!(ppvValues, mean(ppvFold)); push!(npvValues, mean(npvFold))
+        push!(f1Values,  mean(f1Fold))
+        confMatrix .+= mean(confFold, dims=3)[:, :, 1]
+    end
+
+    return (
+        (mean(accValues), std(accValues)),
+        (mean(errValues), std(errValues)),
+        (mean(senValues), std(senValues)),
+        (mean(speValues), std(speValues)),
+        (mean(ppvValues), std(ppvValues)),
+        (mean(npvValues), std(npvValues)),
+        (mean(f1Values),  std(f1Values)),
+        confMatrix
+    )
 end;
+
 
 
 # ----------------------------------------------------------------------------------------------
