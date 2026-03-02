@@ -707,8 +707,126 @@ kNNClassifier = MLJ.@load KNNClassifier pkg=NearestNeighborModels verbosity=0
 DTClassifier  = MLJ.@load DecisionTreeClassifier pkg=DecisionTree verbosity=0
 
 
-function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict, dataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{<:Any,1}}, crossValidationIndices::Array{Int64,1})
-    #
-    # Codigo a desarrollar
-    #
+function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict,
+    dataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{<:Any,1}},
+    crossValidationIndices::Array{Int64,1})
+
+    (inputs, targets) = dataset
+
+    # Caso ANN: delegar directamente en ANNCrossValidation
+    if modelType == :ANN
+        return ANNCrossValidation(
+            modelHyperparameters["topology"],
+            dataset,
+            crossValidationIndices;
+            numExecutions  = get(modelHyperparameters, "numExecutions",   50),
+            maxEpochs      = get(modelHyperparameters, "maxEpochs",       1000),
+            minLoss        = get(modelHyperparameters, "minLoss",         0.0),
+            learningRate   = get(modelHyperparameters, "learningRate",    0.01),
+            validationRatio= get(modelHyperparameters, "validationRatio", 0.0),
+            maxEpochsVal   = get(modelHyperparameters, "maxEpochsVal",    20)
+        )
+    end
+
+    # Para el resto de modelos, convertir targets a String y calcular clases
+    targets  = string.(targets)
+    classes  = unique(targets)
+    k        = maximum(crossValidationIndices)
+    numClasses = length(classes)
+
+    accValues = Float64[]; errValues = Float64[]
+    senValues = Float64[]; speValues = Float64[]
+    ppvValues = Float64[]; npvValues = Float64[]
+    f1Values  = Float64[]
+    confMatrix = zeros(Float64, numClasses, numClasses)
+
+    for fold in 1:k
+        testMask  = crossValidationIndices .== fold
+        trainMask = .!testMask
+
+        trainInputs  = inputs[trainMask, :]
+        trainTargets = targets[trainMask]
+        testInputs   = inputs[testMask,  :]
+        testTargets  = targets[testMask]
+
+        if modelType == :DoME
+            # DoME: trainClassDoME ya devuelve etiquetas del tipo original
+            testOutputs = string.(trainClassDoME(
+                (trainInputs, trainTargets), testInputs,
+                modelHyperparameters["maximumNodes"]
+            ))
+
+        else
+            # Construcción del modelo MLJ según el tipo
+            if modelType == :SVC
+                kernel_str = modelHyperparameters["kernel"]
+                kernel_val = if kernel_str == "linear"
+                    LIBSVM.Kernel.Linear
+                elseif kernel_str == "rbf"
+                    LIBSVM.Kernel.RadialBasis
+                elseif kernel_str == "sigmoid"
+                    LIBSVM.Kernel.Sigmoid
+                elseif kernel_str == "poly"
+                    LIBSVM.Kernel.Polynomial
+                end
+                model = SVMClassifier(
+                    kernel = kernel_val,
+                    cost   = Float64(modelHyperparameters["C"]),
+                    gamma  = Float64(get(modelHyperparameters, "gamma",  1.0)),
+                    degree = Int32(  get(modelHyperparameters, "degree", 3)),
+                    coef0  = Float64(get(modelHyperparameters, "coef0",  0.0))
+                )
+
+            elseif modelType == :DecisionTreeClassifier
+                model = DTClassifier(
+                    max_depth = get(modelHyperparameters, "max_depth", -1),
+                    rng       = Random.MersenneTwister(1)
+                )
+
+            elseif modelType == :KNeighborsClassifier
+                model = kNNClassifier(
+                    K = modelHyperparameters["n_neighbors"]
+                )
+
+            else
+                error("Tipo de modelo desconocido: $modelType")
+            end
+
+            # Entrenar con MLJ
+            mach = machine(model,
+                MLJ.table(trainInputs),
+                categorical(trainTargets; levels = classes))
+            MLJ.fit!(mach, verbosity=0)
+
+            # Predecir
+            if modelType == :SVC
+                testOutputs = string.(MLJ.predict(mach, MLJ.table(testInputs)))
+            else
+                # kNN y DecisionTree devuelven distribución → aplicar mode
+                testOutputs = string.(mode.(MLJ.predict(mach, MLJ.table(testInputs))))
+            end
+        end
+
+        # Calcular métricas (siempre con el vector de clases explícito)
+        (acc, err, sen, spe, ppv, npv, f1, cm) =
+            confusionMatrix(testOutputs, testTargets, classes)
+
+        push!(accValues, acc); push!(errValues, err)
+        push!(senValues, sen); push!(speValues, spe)
+        push!(ppvValues, ppv); push!(npvValues, npv)
+        push!(f1Values,  f1)
+        confMatrix .+= Float64.(cm)
+    end
+
+    return (
+        (mean(accValues), std(accValues)),
+        (mean(errValues), std(errValues)),
+        (mean(senValues), std(senValues)),
+        (mean(speValues), std(speValues)),
+        (mean(ppvValues), std(ppvValues)),
+        (mean(npvValues), std(npvValues)),
+        (mean(f1Values),  std(f1Values)),
+        confMatrix
+    )
 end;
+
