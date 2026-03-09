@@ -38,7 +38,7 @@ targets = dataset[:,5];
 (acc, errorRate, recall, specificity, precision, NPV, F1, confMatrix) = confusionMatrix(sin.(1:8), [falses(4); trues(4)]; threshold=0.9);
 @assert(isapprox(acc, 0.5) && isapprox(errorRate, 0.5) && isapprox(recall, 0.25) && isapprox(specificity, 0.75) && isapprox(precision, 0.5) && isapprox(NPV, 0.5) && isapprox(F1, 1/3.) && confMatrix==[3 1; 3 1])
 
-#=
+
 (acc, errorRate, recall, specificity, precision, NPV, F1, confMatrix) = confusionMatrix(Bool[1 0 0; 1 0 0; 1 0 0; 0 1 0; 0 1 0; 0 1 0; 0 0 1; 0 0 1; 0 0 1], Bool[1 0 0; 0 1 0; 0 0 1; 1 0 0; 0 1 0; 0 0 1; 1 0 0; 0 1 0; 0 0 1]; weighted=true)
 @assert(isapprox(acc, 1/3.) && isapprox(errorRate, 2/3.) && isapprox(recall, 1/3.) && isapprox(specificity, 2/3.) && isapprox(precision, 1/3.) && isapprox(NPV, 2/3.) && isapprox(F1, 1/3.) && confMatrix==[1 1 1; 1 1 1; 1 1 1])
 
@@ -237,4 +237,3 @@ seed!(1); ((testAccuracy_mean, testAccuracy_std), (testErrorRate_mean, testError
 @assert(isapprox(testNPV_mean,         0.777215007215007) && isapprox(testNPV_std,         0.0044380494173253725))
 @assert(isapprox(testF1_mean,          0.18758329332632737) && isapprox(testF1_std,          0.01437405343817687))
 @assert(all(isapprox(testConfusionMatrix, [18.2 14.94 16.86; 15.92 17.1 16.98; 15.82 17.28 16.9])))
-=#
