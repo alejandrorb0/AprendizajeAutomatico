@@ -720,7 +720,7 @@ function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict,
     if modelType == :ANN
         return ANNCrossValidation(
             modelHyperparameters["topology"],
-            dataset,
+            (inputs, targets),
             crossValidationIndices;
             numExecutions  = get(modelHyperparameters, "numExecutions",   50),
             maxEpochs      = get(modelHyperparameters, "maxEpochs",       1000),
@@ -754,10 +754,11 @@ function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict,
 
         if modelType == :DoME
             # DoME: trainClassDoME ya devuelve etiquetas del tipo original
-            testOutputs = string.(trainClassDoME(
-                (trainInputs, trainTargets), testInputs,
+            testOutputs = trainClassDoME(
+                (trainInputs, trainTargets),
+                testInputs,
                 modelHyperparameters["maximumNodes"]
-            ))
+            )
 
         else
             # Construcción del modelo MLJ según el tipo
@@ -788,7 +789,7 @@ function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict,
 
             elseif modelType == :KNeighborsClassifier
                 model = kNNClassifier(
-                    K = modelHyperparameters["n_neighbors"]
+                    K = Int(modelHyperparameters["n_neighbors"])
                 )
 
             else
