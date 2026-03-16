@@ -478,6 +478,7 @@ function printConfusionMatrix(outputs::AbstractArray{<:Real,1}, targets::Abstrac
     printConfusionMatrix(outputs_bool, targets)
 end
 
+######################################
 using SymDoME
 using GeneticProgramming
 
@@ -488,7 +489,7 @@ function trainClassDoME(trainingDataset::Tuple{AbstractArray{<:Real,2}, Abstract
     testInputs     = Float64.(testInputs)
 
     # Entrena el modelo DoME (clasificación binaria)
-    (_, _, _, model) = dome(trainingInputs, trainingTargets; maximumNodes = maximumNodes)
+    (model, _, _, _) = dome(trainingInputs, trainingTargets; maximumNodes=maximumNodes)
 
     # Evalúa en test
     testOutputs = evaluateTree(model, testInputs)
