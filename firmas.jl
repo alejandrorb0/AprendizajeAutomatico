@@ -599,6 +599,7 @@ end;
 
 
 
+
 function ANNCrossValidation(topology::AbstractArray{<:Int,1},
     dataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{<:Any,1}},
     crossValidationIndices::Array{Int64,1};
@@ -713,33 +714,35 @@ function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict,
     dataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{<:Any,1}},
     crossValidationIndices::Array{Int64,1})
 
-    (inputs, targets) = dataset
+    (inputs, rawTargets) = dataset
 
-    # Caso ANN: delegar directamente en ANNCrossValidation
+    # ── Caso ANN: delegar en ANNCrossValidation y devolver su resultado 
     if modelType == :ANN
         return ANNCrossValidation(
             modelHyperparameters["topology"],
             dataset,
             crossValidationIndices;
-            numExecutions  = get(modelHyperparameters, "numExecutions",   50),
-            maxEpochs      = get(modelHyperparameters, "maxEpochs",       1000),
-            minLoss        = get(modelHyperparameters, "minLoss",         0.0),
-            learningRate   = get(modelHyperparameters, "learningRate",    0.01),
-            validationRatio= get(modelHyperparameters, "validationRatio", 0.0),
-            maxEpochsVal   = get(modelHyperparameters, "maxEpochsVal",    20)
+            numExecutions     = get(modelHyperparameters, "numExecutions",    50),
+            transferFunctions = get(modelHyperparameters, "transferFunctions", fill(σ, length(modelHyperparameters["topology"]))),
+            maxEpochs         = get(modelHyperparameters, "maxEpochs",      1000),
+            minLoss           = get(modelHyperparameters, "minLoss",          0.0),
+            learningRate      = get(modelHyperparameters, "learningRate",    0.01),
+            validationRatio   = get(modelHyperparameters, "validationRatio",  0.0),
+            maxEpochsVal      = get(modelHyperparameters, "maxEpochsVal",      20)
         )
     end
 
-    # Para el resto de modelos, convertir targets a String y calcular clases
-    targets  = string.(targets)
-    classes  = unique(targets)
-    k        = maximum(crossValidationIndices)
+    # ── Resto de modelos ─────────────────────────────────────────────────────────
+    # Convertir targets a String para evitar problemas con las librerías
+    targets    = string.(rawTargets)
+    classes    = unique(targets)
     numClasses = length(classes)
+    k          = maximum(crossValidationIndices)
 
-    accValues = Float64[]; errValues = Float64[]
-    senValues = Float64[]; speValues = Float64[]
-    ppvValues = Float64[]; npvValues = Float64[]
-    f1Values  = Float64[]
+    accValues  = Float64[]; errValues = Float64[]
+    senValues  = Float64[]; speValues = Float64[]
+    ppvValues  = Float64[]; npvValues = Float64[]
+    f1Values   = Float64[]
     confMatrix = zeros(Float64, numClasses, numClasses)
 
     for fold in 1:k
@@ -752,14 +755,14 @@ function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict,
         testTargets  = targets[testMask]
 
         if modelType == :DoME
-            # DoME: trainClassDoME ya devuelve etiquetas del tipo original
             testOutputs = string.(trainClassDoME(
-                (trainInputs, trainTargets), testInputs,
+                (trainInputs, trainTargets),
+                testInputs,
                 modelHyperparameters["maximumNodes"]
             ))
 
         else
-            # Construcción del modelo MLJ según el tipo
+            # Construir modelo MLJ según tipo
             if modelType == :SVC
                 kernel_str = modelHyperparameters["kernel"]
                 kernel_val = if kernel_str == "linear"
@@ -768,7 +771,7 @@ function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict,
                     LIBSVM.Kernel.RadialBasis
                 elseif kernel_str == "sigmoid"
                     LIBSVM.Kernel.Sigmoid
-                elseif kernel_str == "poly"
+                else  # "poly"
                     LIBSVM.Kernel.Polynomial
                 end
                 model = SVMClassifier(
@@ -794,28 +797,28 @@ function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict,
                 error("Tipo de modelo desconocido: $modelType")
             end
 
-            # Entrenar con MLJ
+            # Entrenar: fijar levels=classes para que todos los folds usen las mismas clases
             mach = machine(model,
                 MLJ.table(trainInputs),
                 categorical(trainTargets; levels = classes))
-            MLJ.fit!(mach, verbosity=0)
+            MLJ.fit!(mach, verbosity = 0)
 
             # Predecir
             if modelType == :SVC
                 testOutputs = string.(MLJ.predict(mach, MLJ.table(testInputs)))
             else
-                # kNN y DecisionTree devuelven distribución → aplicar mode
+                # kNN y DecisionTree devuelven distribución → mode para clase más probable
                 testOutputs = string.(mode.(MLJ.predict(mach, MLJ.table(testInputs))))
             end
         end
 
-        # Calcular métricas (siempre con el vector de clases explícito)
+        # Calcular métricas usando SIEMPRE la versión con vector de clases explícito
         (acc, err, sen, spe, ppv, npv, f1, cm) =
             confusionMatrix(testOutputs, testTargets, classes)
 
-        push!(accValues, acc); push!(errValues, err)
-        push!(senValues, sen); push!(speValues, spe)
-        push!(ppvValues, ppv); push!(npvValues, npv)
+        push!(accValues, acc);  push!(errValues, err)
+        push!(senValues, sen);  push!(speValues, spe)
+        push!(ppvValues, ppv);  push!(npvValues, npv)
         push!(f1Values,  f1)
         confMatrix .+= Float64.(cm)
     end
@@ -831,4 +834,3 @@ function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict,
         confMatrix
     )
 end;
-
