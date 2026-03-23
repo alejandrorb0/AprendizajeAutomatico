@@ -706,132 +706,122 @@ using MLJ
 using LIBSVM, MLJLIBSVMInterface
 using NearestNeighborModels, MLJDecisionTreeInterface
 
-SVMClassifier = MLJ.@load SVC pkg=LIBSVM verbosity=0
-kNNClassifier = MLJ.@load KNNClassifier pkg=NearestNeighborModels verbosity=0
-DTClassifier  = MLJ.@load DecisionTreeClassifier pkg=DecisionTree verbosity=0
+SVMClassifier = MLJ.@load SVC pkg = LIBSVM verbosity = 0
+kNNClassifier = MLJ.@load KNNClassifier pkg = NearestNeighborModels verbosity = 0
+DTClassifier  = MLJ.@load DecisionTreeClassifier pkg = DecisionTree verbosity = 0
 
+function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict, dataset::Tuple{AbstractArray{<:Real, 2}, AbstractArray{<:Any, 1}}, crossValidationIndices::Array{Int64, 1})
 
-function modelCrossValidation(modelType::Symbol, modelHyperparameters::Dict,
-    dataset::Tuple{AbstractArray{<:Real,2}, AbstractArray{<:Any,1}},
-    crossValidationIndices::Array{Int64,1})
+	(inputs, targets) = dataset
 
-    (inputs, rawTargets) = dataset
+	# Comprobamos que el numero de patrones coincide
+	@assert(size(inputs, 1) == length(targets))
 
-    # ── Caso ANN: delegar en ANNCrossValidation y devolver su resultado 
-    if modelType == :ANN
-        return ANNCrossValidation(
-            modelHyperparameters["topology"],
-            dataset,
-            crossValidationIndices;
-            numExecutions     = get(modelHyperparameters, "numExecutions",    50),
-            transferFunctions = get(modelHyperparameters, "transferFunctions", fill(σ, length(modelHyperparameters["topology"]))),
-            maxEpochs         = get(modelHyperparameters, "maxEpochs",      1000),
-            minLoss           = get(modelHyperparameters, "minLoss",          0.0),
-            learningRate      = get(modelHyperparameters, "learningRate",    0.01),
-            validationRatio   = get(modelHyperparameters, "validationRatio",  0.0),
-            maxEpochsVal      = get(modelHyperparameters, "maxEpochsVal",      20)
-        )
-    end
+	# Vamos a usar RR.NN.AA.
+	if (modelType == :ANN)
 
-    # ── Resto de modelos ─────────────────────────────────────────────────────────
-    # Convertir targets a String para evitar problemas con las librerías
-    targets    = string.(rawTargets)
-    classes    = unique(targets)
-    numClasses = length(classes)
-    k          = maximum(crossValidationIndices)
+		return ANNCrossValidation(modelHyperparameters["topology"],
+			dataset, crossValidationIndices;
+			numExecutions     = haskey(modelHyperparameters, "numExecutions") ? modelHyperparameters["numExecutions"] : 50,
+			transferFunctions = haskey(modelHyperparameters, "transferFunctions") ? modelHyperparameters["transferFunctions"] : fill(σ, length(modelHyperparameters["topology"])),
+			maxEpochs         = haskey(modelHyperparameters, "maxEpochs") ? modelHyperparameters["maxEpochs"] : 1000,
+			minLoss           = haskey(modelHyperparameters, "minLoss") ? modelHyperparameters["minLoss"] : 0.0,
+			learningRate      = haskey(modelHyperparameters, "learningRate") ? modelHyperparameters["learningRate"] : 0.01,
+			validationRatio   = haskey(modelHyperparameters, "validationRatio") ? modelHyperparameters["validationRatio"] : 0,
+			maxEpochsVal      = haskey(modelHyperparameters, "maxEpochsVal") ? modelHyperparameters["maxEpochsVal"] : 20)
 
-    accValues  = Float64[]; errValues = Float64[]
-    senValues  = Float64[]; speValues = Float64[]
-    ppvValues  = Float64[]; npvValues = Float64[]
-    f1Values   = Float64[]
-    confMatrix = zeros(Float64, numClasses, numClasses)
+	end
 
-    for fold in 1:k
-        testMask  = crossValidationIndices .== fold
-        trainMask = .!testMask
+	# No estamos trabajando con redes de neuronas
 
-        trainInputs  = inputs[trainMask, :]
-        trainTargets = targets[trainMask]
-        testInputs   = inputs[testMask,  :]
-        testTargets  = targets[testMask]
+	targets = string.(targets)
 
-        if modelType == :DoME
-            testOutputs = string.(trainClassDoME(
-                (trainInputs, trainTargets),
-                testInputs,
-                modelHyperparameters["maximumNodes"]
-            ))
+	# Que clases de salida tenemos
+	classes = unique(targets)
 
-        else
-            # Construir modelo MLJ según tipo
-            if modelType == :SVC
-                kernel_str = modelHyperparameters["kernel"]
-                kernel_val = if kernel_str == "linear"
-                    LIBSVM.Kernel.Linear
-                elseif kernel_str == "rbf"
-                    LIBSVM.Kernel.RadialBasis
-                elseif kernel_str == "sigmoid"
-                    LIBSVM.Kernel.Sigmoid
-                else  # "poly"
-                    LIBSVM.Kernel.Polynomial
-                end
-                model = SVMClassifier(
-                    kernel = kernel_val,
-                    cost   = Float64(modelHyperparameters["C"]),
-                    gamma  = Float64(get(modelHyperparameters, "gamma",  1.0)),
-                    degree = Int32(  get(modelHyperparameters, "degree", 3)),
-                    coef0  = Float64(get(modelHyperparameters, "coef0",  0.0))
-                )
+	# Creamos los vectores para las metricas que se vayan a usar
+	numFolds        = maximum(crossValidationIndices)
+	testAccuracy    = Array{Float64, 1}(undef, numFolds)
+	testErrorRate   = Array{Float64, 1}(undef, numFolds)
+	testRecall      = Array{Float64, 1}(undef, numFolds)
+	testSpecificity = Array{Float64, 1}(undef, numFolds)
+	testPrecision   = Array{Float64, 1}(undef, numFolds)
+	testNPV         = Array{Float64, 1}(undef, numFolds)
+	testF1          = Array{Float64, 1}(undef, numFolds)
+	testConfusionMatrix = zeros(Int, length(classes), length(classes))
 
-            elseif modelType == :DecisionTreeClassifier
-                model = DTClassifier(
-                    max_depth = get(modelHyperparameters, "max_depth", -1),
-                    rng       = Random.MersenneTwister(1)
-                )
+	# Para cada fold, entrenamos
+	for numFold in 1:numFolds
 
-            elseif modelType == :KNeighborsClassifier
-                model = kNNClassifier(
-                    K = modelHyperparameters["n_neighbors"]
-                )
+		# Dividimos los datos en entrenamiento y test
+		trainingInputs  = inputs[crossValidationIndices.!=numFold, :]
+		testInputs      = inputs[crossValidationIndices.==numFold, :]
+		trainingTargets = targets[crossValidationIndices.!=numFold]
+		testTargets     = targets[crossValidationIndices.==numFold]
 
-            else
-                error("Tipo de modelo desconocido: $modelType")
-            end
+		# Creamos el modelo según lo que nos hayan pasado como parámetro
+		if modelType == :DoME
 
-            # Entrenar: fijar levels=classes para que todos los folds usen las mismas clases
-            mach = machine(model,
-                MLJ.table(trainInputs),
-                categorical(trainTargets; levels = classes))
-            MLJ.fit!(mach, verbosity = 0)
+			testOutputs = trainClassDoME((trainingInputs, trainingTargets), testInputs, modelHyperparameters["maximumNodes"])
 
-            # Predecir
-            if modelType == :SVC
-                testOutputs = string.(MLJ.predict(mach, MLJ.table(testInputs)))
-            else
-                # kNN y DecisionTree devuelven distribución → mode para clase más probable
-                testOutputs = string.(mode.(MLJ.predict(mach, MLJ.table(testInputs))))
-            end
-        end
+		else
 
-        # Calcular métricas usando SIEMPRE la versión con vector de clases explícito
-        (acc, err, sen, spe, ppv, npv, f1, cm) =
-            confusionMatrix(testOutputs, testTargets, classes)
+			if modelType == :SVC
+				@assert((modelHyperparameters["kernel"] == "linear") || (modelHyperparameters["kernel"] == "poly") || (modelHyperparameters["kernel"] == "rbf") || (modelHyperparameters["kernel"] == "sigmoid"))
+				model = SVMClassifier(
+					kernel =
+					modelHyperparameters["kernel"] == "linear"  ? LIBSVM.Kernel.Linear :
+							modelHyperparameters["kernel"] == "rbf"     ? LIBSVM.Kernel.RadialBasis :
+							modelHyperparameters["kernel"] == "poly"    ? LIBSVM.Kernel.Polynomial :
+							modelHyperparameters["kernel"] == "sigmoid" ? LIBSVM.Kernel.Sigmoid : nothing,
+					cost   = Float64(modelHyperparameters["C"]),
+					gamma  = Float64(get(modelHyperparameters, "gamma", -1)),
+					degree = Int32(get(modelHyperparameters, "degree", -1)),
+					coef0  = Float64(get(modelHyperparameters, "coef0", -1)))
+				# Cuidado con los tipos de los argumentos cost, gamma, degree y coef0, tienen que ser esos. No vale, por ejemplo, que degree sea Int, tiene que ser Int32
 
-        push!(accValues, acc);  push!(errValues, err)
-        push!(senValues, sen);  push!(speValues, spe)
-        push!(ppvValues, ppv);  push!(npvValues, npv)
-        push!(f1Values,  f1)
-        confMatrix .+= Float64.(cm)
-    end
+			elseif modelType == :DecisionTreeClassifier
+				model = DTClassifier(max_depth = modelHyperparameters["max_depth"], rng = Random.MersenneTwister(1))
+			elseif modelType == :KNeighborsClassifier
+				model = kNNClassifier(K = modelHyperparameters["n_neighbors"])
+			else
+				error(string("Unknown model ", modelType))
+			end
 
-    return (
-        (mean(accValues), std(accValues)),
-        (mean(errValues), std(errValues)),
-        (mean(senValues), std(senValues)),
-        (mean(speValues), std(speValues)),
-        (mean(ppvValues), std(ppvValues)),
-        (mean(npvValues), std(npvValues)),
-        (mean(f1Values),  std(f1Values)),
-        confMatrix
-    )
+			# Creamos el objeto de tipo Machine
+			mach = machine(model, MLJ.table(trainingInputs), categorical(trainingTargets))
+
+			# Entrenamos el modelo con el conjunto de entrenamiento
+			MLJ.fit!(mach, verbosity = 0)
+
+			# Pasamos el conjunto de test
+			testOutputs = MLJ.predict(mach, MLJ.table(testInputs))
+			if modelType != :SVC
+				testOutputs = mode.(testOutputs)
+			end
+
+		end
+
+		# Calculamos las metricas y las almacenamos en las posiciones de este fold de cada vector
+		(testAccuracy[numFold], testErrorRate[numFold], testRecall[numFold], testSpecificity[numFold], testPrecision[numFold], testNPV[numFold], testF1[numFold], testConfusionMatrixThisFold) =
+			confusionMatrix(testOutputs, testTargets, classes)
+
+		@assert(isapprox(testAccuracy[numFold], sum([testConfusionMatrixThisFold[numClass, numClass] for numClass in 1:length(classes)]) / sum(testConfusionMatrixThisFold)))
+
+		testConfusionMatrix .+= testConfusionMatrixThisFold
+
+	end
+
+	return (mean(testAccuracy), std(testAccuracy)),
+	(mean(testErrorRate), std(testErrorRate)),
+	(mean(testRecall), std(testRecall)),
+	(mean(testSpecificity), std(testSpecificity)),
+	(mean(testPrecision), std(testPrecision)),
+	(mean(testNPV), std(testNPV)),
+	(mean(testF1), std(testF1)),
+	testConfusionMatrix
+
 end;
+
+
+
