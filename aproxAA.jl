@@ -1,11 +1,13 @@
 using Pkg
-#Pkg.add(["Images", "FileIO", "ImageIO", "ImageMagick", "Statistics", "MLJ" ,"LIBSVM", "MLJLIBSVMInterface" ,"NearestNeighborModels", "MLJDecisionTreeInterface", "DataFrames", "Plots"])
+# Añadido StatsBase a la lista de paquetes
+Pkg.add(["Images", "FileIO", "ImageIO", "ImageMagick", "Statistics", "StatsBase", "MLJ" ,"LIBSVM", "MLJLIBSVMInterface" ,"NearestNeighborModels", "MLJDecisionTreeInterface", "DataFrames", "Plots"])
 
 using Images
 using FileIO
 using ImageIO
 using ImageMagick
 using Statistics
+using StatsBase # Importante para skewness, kurtosis e histogramas
 using Plots
 using Random
 using MLJ
@@ -23,17 +25,17 @@ function read_images_and_labels(base_path::String)
     images = Vector{Array{Float64,3}}()
     labels = String[]
     
-    # Las 4 carpetas originales que descargaste
+    # Las 2 carpetas originales
     carpetas_dataset = ["no-tumor", "tumor"]
 
     for carpeta in carpetas_dataset
         subdir = joinpath(base_path, carpeta) 
         if !isdir(subdir)
-            error("Directorio no encontrado: $subdir. Asegúrate de tener las 4 carpetas ahí.")
+            error("Directorio no encontrado: $subdir. Asegúrate de tener las carpetas ahí.")
         end
         
-        # Asignar la etiqueta binaria dependiendo de la carpeta
-        etiqueta_binaria = (carpeta == "notumor") ? "sano" : "tumor"
+        # Etiqueta binaria
+        etiqueta_binaria = (carpeta == "no-tumor") ? "sano" : "tumor"
 
         for file in readdir(subdir, join=true)
             if any(ext -> endswith(lowercase(file), ext), image_extensions)
@@ -46,36 +48,59 @@ function read_images_and_labels(base_path::String)
                 
                 img_array = permutedims(img_array, (2, 3, 1))
                 push!(images, img_array)
-                push!(labels, etiqueta_binaria) # Guardamos "tumor" o "sano"
+                push!(labels, etiqueta_binaria)
             end
         end
     end
+    
+    # Comprobación de seguridad por pantalla
+    println("--> Recuento de clases:")
+    println("    Sanos: ", count(x -> x == "sano", labels))
+    println("    Tumores: ", count(x -> x == "tumor", labels))
+    
     return images, labels
 end
 
 println("Iniciando carga de datos...")
-# OJO: Como vas a hacer validación cruzada, te recomiendo que metas 
-# TODAS las fotos (las de Training y Testing de Kaggle juntas) en sus respectivas
-# carpetas dentro de "./datasets" para tener más volumen de datos.
 images, labels = read_images_and_labels("./datasets") 
 num_images = length(images)
 println("Cargadas $num_images imagenes correctamente.")
 
-# 3. Extraer características (Aproximación Machine Learning Clásico)
+# 3. Extraer características (Ahora 10 características estadísticas)
+
+# Funciones auxiliares para calcular la entropía del histograma
+function hist_intensidades(data; bins=256)
+    h = fit(Histogram, data, range(0, stop=1, length=bins))
+    prob = h.weights ./ sum(h.weights)
+    return filter(x -> x > 0, prob) # Filtrar ceros para evitar log(0)
+end
+
+function entropy(p)
+    return -sum(p .* log2.(p))
+end
+
 function calculate_image_statistics(images)
     n = length(images)
-    # Extraemos 4 características básicas: Media, Desviación típica, Mínimo y Máximo
-    results = zeros(n, 4) 
+    results = zeros(n, 10) # Matriz ampliada a 10 columnas
+    
     for (i, img) in enumerate(images)
-        results[i, 1] = mean(img)
-        results[i, 2] = std(img)
-        results[i, 3] = minimum(img)
-        results[i, 4] = maximum(img)
+        data = vec(img) # Convertir la imagen 3D a un vector plano de píxeles
+        
+        results[i, 1] = mean(data)               # 1. Media
+        results[i, 2] = var(data)                # 2. Varianza
+        results[i, 3] = std(data)                # 3. Desviación Típica
+        results[i, 4] = skewness(data)           # 4. Sesgo (Skewness)
+        results[i, 5] = kurtosis(data)           # 5. Curtosis
+        results[i, 6] = entropy(hist_intensidades(data)) # 6. Entropía
+        results[i, 7] = mean(data.^2)            # 7. Energía
+        results[i, 8] = maximum(data)            # 8. Máximo
+        results[i, 9] = minimum(data)            # 9. Mínimo
+        results[i, 10] = results[i, 8] - results[i, 9] # 10. Rango Dinámico
     end
     return results
 end
 
-println("Extrayendo características estadísticas...")
+println("Extrayendo 10 características estadísticas por imagen...")
 stats = calculate_image_statistics(images)
 dataset = (stats, labels)
 
@@ -83,16 +108,16 @@ dataset = (stats, labels)
 rng = MersenneTwister(123)
 crossValidationIndices = rand(rng, 1:5, num_images)
 
-# 5. Configuración de modelos (Cumpliendo los mínimos del PDF)
+# 5. Configuración de modelos [cite: 116, 117, 119, 121, 122]
 modelConfigs = []
 
-# RR.NN.AA (Mínimo 8 arquitecturas) [cite: 116]
+# RR.NN.AA (8 arquitecturas)
 ann_topologies = [[5], [10], [20], [50], [10, 5], [20, 10], [50, 20], [100, 50]]
 for topology in ann_topologies
     push!(modelConfigs, (:ANN, Dict("topology" => topology, "numExecutions" => 10, "maxEpochs" => 500, "minLoss" => 0.0, "learningRate" => 0.01)))
 end
 
-# SVM (Mínimo 8 configuraciones: kernels y C) [cite: 117]
+# SVM (16 configuraciones)
 svc_kernels = ["linear", "poly", "rbf", "sigmoid"]
 svc_C = [0.1, 1.0, 10.0, 100.0]
 for kernel in svc_kernels, C in svc_C
@@ -105,17 +130,17 @@ for kernel in svc_kernels, C in svc_C
     push!(modelConfigs, (:SVC, config))
 end
 
-# Árboles de Decisión (Mínimo 6 profundidades) [cite: 119]
+# Árboles de Decisión (6 profundidades)
 for d in [3, 5, 7, 10, 15, 20]
     push!(modelConfigs, (:DecisionTreeClassifier, Dict("max_depth" => d)))
 end
 
-# k-Nearest Neighbors (Mínimo 6 valores de k) [cite: 121]
+# k-Nearest Neighbors (6 valores de k)
 for k in [1, 3, 5, 7, 9, 11]
     push!(modelConfigs, (:KNeighborsClassifier, Dict("n_neighbors" => k)))
 end
 
-# DoME (Mínimo 8 valores de número de nodos) [cite: 122]
+# DoME (8 valores de número de nodos)
 for nodes in [50, 100, 150, 200, 250, 300, 350, 400]
     push!(modelConfigs, (:DoME, Dict("maximumNodes" => nodes)))
 end
